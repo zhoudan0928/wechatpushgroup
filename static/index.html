@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>微信群组配置</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f2f5;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        h1 {
+            color: #2c3e50;
+            font-size: 2.5em;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .container {
+            background-color: #fff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            width: 80%;
+            max-width: 600px;
+            margin: 20px;
+        }
+        #password-container {
+            margin-bottom: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        #password-container label {
+            margin-bottom: 10px;
+            font-size: 1.1em;
+            color: #34495e;
+        }
+        #password-container input[type="password"] {
+            padding: 10px;
+            border: 1px solid #bdc3c7;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            width: 80%;
+            max-width: 300px;
+        }
+        #password-container button {
+            background-color: #3498db;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+        #password-container button:hover {
+            background-color: #2980b9;
+        }
+        #message-container {
+            display: none;
+            margin-top: 20px;
+            font-size: 1.3em;
+            color: #2ecc71;
+            text-align: center;
+        }
+         #login-container {
+            display: none;
+            margin-top: 20px;
+            text-align: center;
+        }
+        #login-container img {
+            max-width: 300px;
+            margin-bottom: 20px;
+        }
+        #group-list-container {
+            display: none;
+            margin-top: 20px;
+        }
+        #group-list-container h2 {
+            font-size: 1.5em;
+            color: #34495e;
+            margin-bottom: 10px;
+        }
+        #group-list {
+            margin-top: 10px;
+            padding: 10px;
+            border: 1px solid #ecf0f1;
+            border-radius: 4px;
+        }
+        .group-item {
+            margin-bottom: 8px;
+            padding: 8px;
+            background-color: #f9f9f9;
+            border-radius: 4px;
+            color: #34495e;
+        }
+    </style>
+</head>
+<body onload="initPage()">
+    <div class="container">
+        <h1>微信群组配置</h1>
+        <div id="password-container">
+            <label for="password">请输入密码：</label>
+            <input type="password" id="password">
+            <button onclick="verifyPassword()">确认</button>
+        </div>
+        <div id="message-container">
+            配置已更新，所有在通讯录中的群聊将接收所有消息，不在通讯录的群聊将只接收@所有人消息。
+        </div>
+         <div id="login-container">
+            <h2>请使用微信扫描二维码登录</h2>
+            <img id="qrcode" src="" alt="微信登录二维码">
+            <p id="login-status-message"></p>
+        </div>
+        <div id="group-list-container">
+            <h2>当前可接收消息的群聊：</h2>
+            <div id="group-list">
+                <!-- 群组列表将在这里动态生成 -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let loginCheckInterval;
+        let passwordVerified = false;
+        let qrCodeUrl = "";
+
+        function initPage() {
+            // 初始化时只显示密码输入框，隐藏其他内容
+            document.getElementById('password-container').style.display = 'flex';
+            document.getElementById('login-container').style.display = 'none';
+            document.getElementById('group-list-container').style.display = 'none';
+            document.getElementById('message-container').style.display = 'none';
+        }
+
+        function fetchGroupList() {
+            fetch('/active-groups')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('获取群组列表失败：' + response.statusText);
+                }
+                return response.json();
+            })
+            .then(groups => {
+                const groupList = document.getElementById('group-list');
+                groupList.innerHTML = ''; // 清空之前的列表
+                if (groups.length === 0) {
+                    groupList.innerHTML = '<p>当前没有可接收消息的群聊。</p>';
+                } else {
+                    groups.forEach(groupName => {
+                        const groupItem = document.createElement('div');
+                        groupItem.className = 'group-item';
+                        groupItem.textContent = groupName;
+                        groupList.appendChild(groupItem);
+                    });
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
+        }
+
+        function verifyPassword() {
+            const password = document.getElementById('password').value;
+            if (!password) {
+                alert('请输入密码');
+                return;
+            }
+            
+            // 密码输入后，检查微信登录状态
+            fetch('/login-status')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('获取登录状态失败：' + response.statusText);
+                }
+                return response.json();
+            })
+            .then(data => {
+            document.getElementById('password-container').style.display = 'none';
+                
+                if (data.error) {
+                    console.log('获取登录状态失败：' + data.error);
+                    return;
+                }
+                
+                if (data.isLogged) {
+                    // 微信已登录，直接显示群组列表
+                    document.getElementById('message-container').style.display = 'block';
+                    document.getElementById('group-list-container').style.display = 'block';
+                    fetchGroupList();
+                } else {
+                    // 微信未登录，显示二维码
+            passwordVerified = true;
+            displayQRCode();
+            checkLoginStatus();
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('获取登录状态失败：' + error.message);
+                // 发生错误时重新显示密码输入框
+                document.getElementById('password-container').style.display = 'flex';
+            });
+        }
+
+        function displayQRCode() {
+            fetch('/login-status')
+            .then(response => {
+                 if (!response.ok) {
+                    throw new Error('获取登录状态失败：' + response.statusText);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.error) {
+                    console.log('获取登录状态失败：' + data.error);
+                    return;
+                }
+                if (!data.isLogged && data.qrCodeUrl) {
+                qrCodeUrl = data.qrCodeUrl;
+                document.getElementById('qrcode').src = qrCodeUrl;
+                document.getElementById('login-container').style.display = 'block';
+                document.getElementById('login-status-message').textContent = '请使用微信扫描二维码登录';
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
+        }
+
+       function checkLoginStatus() {
+            if (!passwordVerified) {
+                return;
+            }
+            fetch('/login-status')
+            .then(response => {
+                 if (!response.ok) {
+                    throw new Error('获取登录状态失败：' + response.statusText);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.error) {
+                    console.log('获取登录状态失败：' + data.error);
+                    return;
+                }
+                if (data.isLogged) {
+                    // 用户已登录，显示群组列表
+                    document.getElementById('login-container').style.display = 'none';
+                    document.getElementById('message-container').style.display = 'block';
+                    document.getElementById('group-list-container').style.display = 'block';
+                    clearInterval(loginCheckInterval);
+                    fetchGroupList();
+                } else if (!loginCheckInterval) {
+                    // 未登录且未设置轮询，设置轮询检查登录状态
+                    loginCheckInterval = setInterval(checkLoginStatus, 5000);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
+        }
+    </script>
+</body>
+</html>
