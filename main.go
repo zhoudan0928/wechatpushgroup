@@ -355,23 +355,40 @@ func startHTTPServer() {
 
 	// 验证密码接口
 	http.HandleFunc("/verify-password", func(w http.ResponseWriter, r *http.Request) {
-		password := os.Getenv("PAGE_PASSWORD")
-		if password == "" {
-			log.Println("环境变量 PAGE_PASSWORD 未设置")
-			http.Error(w, "服务器错误", http.StatusInternalServerError)
+		w.Header().Set("Content-Type", "application/json")
+		
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
-		// 获取用户输入的密码
-		inputPassword := r.URL.Query().Get("password")
-
-		// 验证密码是否正确
-		if inputPassword == password {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]bool{"success": true})
-		} else {
-			http.Error(w, "密码错误", http.StatusUnauthorized)
+		var data struct {
+			Password string `json:"password"`
 		}
+
+		if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		pagePassword := os.Getenv("PAGE_PASSWORD")
+		if pagePassword == "" {
+			http.Error(w, "PAGE_PASSWORD not set", http.StatusInternalServerError)
+			return
+		}
+
+		if data.Password != pagePassword {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": "密码错误",
+			})
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "验证成功",
+		})
 	})
 
 	// 保存配置接口,添加密码验证
