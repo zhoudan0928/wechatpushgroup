@@ -85,6 +85,13 @@ func initBotAndQRCode() {
 		loginSuccess = false
 		loginMutex.Unlock()
 		log.Println("已登出")
+		
+		// 发送微信掉线通知邮件
+		err := mail.SendEmail("微信掉线通知", "您的微信客户端已掉线，请及时重新登录。")
+		if err != nil {
+			log.Printf("发送掉线通知邮件失败: %v", err)
+		}
+		
 		// 重新初始化bot
 		go initBotAndQRCode()
 	}
@@ -437,12 +444,14 @@ func startHTTPServer() {
 }
 
 func updateGroupList(bot *openwechat.Bot, self *openwechat.Self) {
-	// 获取当前用户所在的群组列表, 强制更新群组列表
-	// 等待一段时间，以便让微信服务器有时间同步群组信息
-	time.Sleep(2 * time.Second)
-	groups, err := self.Groups(true)
+	groups, err := self.Groups()
 	if err != nil {
 		log.Printf("获取群组列表失败: %v", err)
+		// 发送获取群组列表失败的通知邮件
+		mailErr := mail.SendEmail("微信异常通知", fmt.Sprintf("获取微信群组列表失败，可能是网络问题或微信已掉线。错误信息：%v", err))
+		if mailErr != nil {
+			log.Printf("发送群组列表失败通知邮件失败: %v", mailErr)
+		}
 		return
 	}
 
