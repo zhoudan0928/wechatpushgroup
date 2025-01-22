@@ -28,6 +28,9 @@ var loginSuccess bool       // 用于标记是否登录成功
 var loginMutex sync.Mutex   // 用于保护 loginSuccess 变量
 var botInitialized bool     // 用于标记 bot 是否初始化完成
 var botInitMutex sync.Mutex // 用于保护 botInitialized 变量
+var lastLoginAttempt time.Time
+var loginAttemptCount int
+var loginCooldown = 5 * time.Minute // 登录冷却时间
 
 func main() {
 	// 检查 /app/static/index.html 文件是否存在
@@ -55,6 +58,12 @@ func main() {
 }
 
 func initBotAndQRCode() {
+	// 检查是否需要等待冷却时间
+	if time.Since(lastLoginAttempt) < loginCooldown && loginAttemptCount > 2 {
+		log.Printf("登录尝试过于频繁，等待 %v 后重试", loginCooldown-time.Since(lastLoginAttempt))
+		time.Sleep(loginCooldown - time.Since(lastLoginAttempt))
+	}
+
 	// 创建一个新的机器人实例
 	bot = openwechat.DefaultBot(openwechat.Desktop) // 初始化全局 bot 变量
 
@@ -75,6 +84,8 @@ func initBotAndQRCode() {
 		loginMutex.Lock()
 		loginSuccess = true
 		qrCodeUrl = "" // 清除二维码URL
+		lastLoginAttempt = time.Now()
+		loginAttemptCount = 0 // 重置登录计数
 		loginMutex.Unlock()
 		log.Println("登录成功")
 	}
@@ -83,13 +94,20 @@ func initBotAndQRCode() {
 	bot.LogoutCallBack = func(bot *openwechat.Bot) {
 		loginMutex.Lock()
 		loginSuccess = false
+		loginAttemptCount++ // 增加登录尝试计数
 		loginMutex.Unlock()
 		log.Println("已登出")
 		
 		// 发送微信掉线通知邮件
-		err := mail.SendEmail("微信掉线通知", "您的微信客户端已掉线，请及时重新登录。")
+		err := mail.SendEmail("微信掉线通知", fmt.Sprintf("您的微信客户端已掉线，这是第 %d 次掉线。如果频繁掉线，请检查是否在其他设备上登录。系统将在 %v 后尝试重新登录。", loginAttemptCount, loginCooldown))
 		if err != nil {
 			log.Printf("发送掉线通知邮件失败: %v", err)
+		}
+		
+		// 如果掉线次数过多，等待一段时间再重试
+		if loginAttemptCount > 2 {
+			log.Printf("检测到频繁掉线，等待 %v 后重试", loginCooldown)
+			time.Sleep(loginCooldown)
 		}
 		
 		// 重新初始化bot
