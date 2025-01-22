@@ -31,6 +31,25 @@ var botInitMutex sync.Mutex // 用于保护 botInitialized 变量
 var lastLoginAttempt time.Time
 var loginAttemptCount int
 var loginCooldown = 5 * time.Minute // 登录冷却时间
+var initMutex sync.Mutex            // 用于保护Bot初始化
+var botInstance *openwechat.Bot     // Bot单例
+
+// 初始化Bot单例
+func getBotInstance() *openwechat.Bot {
+	initMutex.Lock()
+	defer initMutex.Unlock()
+
+	if botInstance != nil && botInstance.Alive() {
+		return botInstance
+	}
+
+	if botInstance != nil {
+		botInstance.Exit() // 确保旧实例被清理
+		botInstance = nil
+	}
+
+	return nil
+}
 
 func main() {
 	// 检查 /app/static/index.html 文件是否存在
@@ -58,14 +77,24 @@ func main() {
 }
 
 func initBotAndQRCode() {
+	initMutex.Lock()
+	defer initMutex.Unlock()
+
 	// 检查是否需要等待冷却时间
 	if time.Since(lastLoginAttempt) < loginCooldown && loginAttemptCount > 2 {
 		log.Printf("登录尝试过于频繁，等待 %v 后重试", loginCooldown-time.Since(lastLoginAttempt))
 		time.Sleep(loginCooldown - time.Since(lastLoginAttempt))
 	}
 
+	// 确保旧的Bot实例被清理
+	if bot != nil {
+		bot.Exit()
+		bot = nil
+	}
+
 	// 创建一个新的机器人实例
-	bot = openwechat.DefaultBot(openwechat.Desktop) // 初始化全局 bot 变量
+	bot = openwechat.DefaultBot(openwechat.Desktop)
+	botInstance = bot // 更新单例
 
 	// 注册消息处理函数
 	bot.MessageHandler = func(msg *openwechat.Message) {
@@ -75,7 +104,7 @@ func initBotAndQRCode() {
 	// 注册登录事件
 	bot.UUIDCallback = func(uuid string) {
 		log.Printf("访问下面网址扫描二维码登录: https://login.weixin.qq.com/qrcode/%s", uuid)
-		qrCodeUUID = uuid // 保存 UUID
+		qrCodeUUID = uuid
 		qrCodeUrl = fmt.Sprintf("https://login.weixin.qq.com/qrcode/%s", qrCodeUUID)
 	}
 
@@ -83,34 +112,49 @@ func initBotAndQRCode() {
 	bot.LoginCallBack = func(body openwechat.CheckLoginResponse) {
 		loginMutex.Lock()
 		loginSuccess = true
-		qrCodeUrl = "" // 清除二维码URL
+		qrCodeUrl = ""
 		lastLoginAttempt = time.Now()
-		loginAttemptCount = 0 // 重置登录计数
+		loginAttemptCount = 0
 		loginMutex.Unlock()
 		log.Println("登录成功")
+
+		// 启动心跳检测
+		go startHeartbeat(bot)
 	}
 
 	// 注册登出事件
 	bot.LogoutCallBack = func(bot *openwechat.Bot) {
 		loginMutex.Lock()
 		loginSuccess = false
-		loginAttemptCount++ // 增加登录尝试计数
+		loginAttemptCount++
+		currentCount := loginAttemptCount
 		loginMutex.Unlock()
 		log.Println("已登出")
-		
+
 		// 发送微信掉线通知邮件
-		err := mail.SendEmail("微信掉线通知", fmt.Sprintf("您的微信客户端已掉线，这是第 %d 次掉线。如果频繁掉线，请检查是否在其他设备上登录。系统将在 %v 后尝试重新登录。", loginAttemptCount, loginCooldown))
+		err := mail.SendEmail("微信掉线通知", fmt.Sprintf("您的微信客户端已掉线，这是第 %d 次掉线。如果频繁掉线，请检查是否在其他设备上登录。", currentCount))
 		if err != nil {
 			log.Printf("发送掉线通知邮件失败: %v", err)
 		}
-		
-		// 如果掉线次数过多，等待一段时间再重试
-		if loginAttemptCount > 2 {
-			log.Printf("检测到频繁掉线，等待 %v 后重试", loginCooldown)
-			time.Sleep(loginCooldown)
+
+		// 清理当前Bot实例
+		if bot != nil {
+			bot.Exit()
 		}
-		
-		// 重新初始化bot
+		botInstance = nil
+
+		// 计算重试延迟
+		delay := time.Minute
+		if currentCount > 2 {
+			delay = loginCooldown
+		} else {
+			delay = time.Duration(currentCount) * time.Minute
+		}
+
+		log.Printf("将在 %v 后尝试重新登录", delay)
+		time.Sleep(delay)
+
+		// 重新初始化
 		go initBotAndQRCode()
 	}
 
@@ -136,18 +180,26 @@ func initBotAndQRCode() {
 	allGroups = make(map[string]bool)
 	updateGroupList(bot, self)
 
-	// 启动定时任务，每隔一段时间更新群组列表
-	go func() {
-		ticker := time.NewTicker(5 * time.Minute) // 每5分钟更新一次
-		defer ticker.Stop()
-		for range ticker.C {
-			updateGroupList(bot, self)
-		}
-	}()
-
 	botInitMutex.Lock()
 	botInitialized = true
 	botInitMutex.Unlock()
+}
+
+// 心跳检测
+func startHeartbeat(bot *openwechat.Bot) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if !bot.Alive() {
+				log.Println("心跳检测：Bot已离线")
+				return
+			}
+			// 可以添加其他在线状态检查
+		}
+	}
 }
 
 func handleMessage(bot *openwechat.Bot, msg *openwechat.Message) {
